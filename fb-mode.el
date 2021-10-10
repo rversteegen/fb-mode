@@ -6,6 +6,21 @@
 
 ;; This software is in the public domain and is provided with absolutely no warranty.
 
+;; Usage:
+;; Make sure the directory this file is in is in your load-path, and add
+;;  (require 'fb-mode)
+;; to your .emacs file.
+;; If you use other file extensions for FB files, such as .inc, add them to your
+;; auto-mode-alist.
+;; You will likely want to set the fb-emph-face to something suitable for your theme,
+;; and customise fb-indent-level, the number of spaces to indent by.
+;;
+;; Special key combos:
+;;  C-c C-h:  Lookup the symbol at point in the manual (incomplete)
+;;  C-M-j:    Split the current line at point (possibly in the middle of a comment or string)
+;;  C-c C-f:  Insert a simple FOR loop
+
+
 (provide 'fb-mode)
 
 (add-to-list 'auto-mode-alist '("\\.\\(bi\\|bas\\)\\'" . fb-mode))
