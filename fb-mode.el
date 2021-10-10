@@ -1,0 +1,557 @@
+;;; fb-mode.el --- An Emacs major mode for the FreeBASIC programming language
+
+;; Author:     Ralph Versteegen <rbversteegen@gmail.com>
+;; Version:    1.0.0
+;; Keywords:   languages
+
+;; This software is in the public domain and is provided with absolutely no warranty.
+
+(provide 'fb-mode)
+
+(add-to-list 'auto-mode-alist '("\\.\\(bi\\|bas\\)\\'" . fb-mode))
+
+(require 'cl)  ; TODO: figure out how to replace with cl-lib
+
+(defcustom fb-indent-level 4  ;c-basic-offset
+  "Number of spaces for each indentation step."
+  :type 'integer
+  :safe 'integerp)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Generic utility functions
+
+(defun fb-rex (string)
+  "Form a regexp by escaping (, | and ) characters, unless prefixed with `.
+Also '` ' becomes '\\\\s ' (a whitespace character).
+ a|b`( -> a\\\\|b("
+  (replace-regexp-in-string
+   "` " "\\\\s "
+   (replace-regexp-in-string
+    "`\\\\\\([(|)]\\)" "\\1"   ; Undo escaping
+    (replace-regexp-in-string "[(|)]" "\\\\\\\&" string))))
+;(assert (equal (fb-rex "a|b`( ` ") "a\\|b( \\s "))
+
+(defun regexp-join-symbols (words)
+  "Return a regexp matching any of a list of symbols, without any numbered groups.
+There must be no regex operators in the words!"
+  ;(mapconcat (lambda (x) (concat "\\_<" x "\\_>")) words "\\|"))
+  ;(concat "\\_<\\(?:" (apply 'join "\\|" words) "\\)\\_>"))
+  (concat "\\_<" (regexp-opt words) "\\_>"))
+
+(defun prompt-with-default (prompt default)
+  "Prompt for a string, with a default string (possibly nil)"
+  (let*
+      ((prompt-with-default (if default
+                                (concat prompt "(default: " default ") ")
+                              prompt))
+       (input (read-from-minibuffer prompt-with-default nil nil nil nil default)))
+    (if (equal "" input)
+        default
+      input)))
+
+(defun prompt-with-default-at-point (prompt-text &optional not-regexp)
+  "Prompt for a string, with default being the tag at point, if any"
+  (prompt-with-default
+    prompt-text
+    ;; -as-regexp variant used for two reasons:
+    ;; firstly, want a regexp, secondly can be overridden with find-tag-default-function
+    (if not-regexp (default-at-point) (find-tag-default-as-regexp))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(setq fb-syntax-table (make-syntax-table c-mode-syntax-table))
+(modify-syntax-entry ?/ ". 14c" fb-syntax-table) ; punctuation, /' and '/ (comments containing / are type c)
+(modify-syntax-entry ?' "< 23" fb-syntax-table)  ; comment start, /' and '/
+(modify-syntax-entry ?\n ">" fb-syntax-table)    ; comment end
+(modify-syntax-entry ?\\ "_" fb-syntax-table)
+(modify-syntax-entry ?# "w" fb-syntax-table)
+
+;; Start of a function or type. Used for syntax highlighting
+(setq -fb-toplevel-start
+      (fb-rex "\\_<(?:(?:(?:public|private|static|local)?` *(?:function|sub|constructor|destructor|operator|property|starttest))|(?:#` *macro|type|union|enum))\\_>"))
+
+;; TODO: incomplete
+;; sub, function, etc are excluded because they're handled elsewhere
+(setq -fb-keywords
+      (split-string "if then else elseif end with while until wend for step next do loop to scope select case
+                     exit continue break return goto gosub resume
+                     shared preserve dim redim var const extern static common erase
+                     new delete
+                     inp asm
+                     declare overload explicit virtual abstract extends
+                     __function __thiscall threadcall
+                     export naked alias cdecl pascal stdcall overload override
+                     retrace withnode readnode loadarray ignoreall"))  ;; RELOADbasic extensions
+
+
+;end of expression due to delimiter, ), comment, or newline
+(setq -fb-end-of-var-decl "\\([\n,=']\\|/'\\)")
+
+; comment start or newline : "\\s<\\|\n"
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Indentation
+
+
+(defun fb--find-continuation-prev-line ()
+  "If the previous line ends in _, move after the _, set match data and return non-nil.
+Otherwise, returns nil and doesn't move point."
+  (let ((save-point (point)))
+    ;; Start of previous non-empty/commented line
+    (beginning-of-line)
+    ;; Go backwards over whitespace, newlines and comments. Doesn't work if inside a comment.
+    (save-restriction
+      ;; Don't go before the previous line
+      (narrow-to-region (line-beginning-position 0) (point))
+      (forward-comment -999))
+    (skip-syntax-backward " ")
+    ;; This will match a line ending with an open string "_ but that isn't valid FB syntax anyway
+    ;; (if (> (point) 0)
+    ;;     (backward-char))  ; Back over the _ if it's there
+    (if (looking-back "\\_<_\\_>")
+        (progn
+          (backward-char)
+          t)
+      (goto-char save-point)
+      nil)))  ;Failed
+
+(defun fb-back-to-initial-indentation ()
+  "Like back-to-indentation, but if the current line is a continuation of a previous one,
+move to the real beginning of it (the first non-whitespace char on it)"
+  (interactive)
+  ;; Repeatedly search just the previous line
+  ;(while (re-search-backward "\\_<_\\_>" (line-beginning-position 0) t))
+  (while (fb--find-continuation-prev-line))
+  (back-to-indentation))
+
+;; These are keywords which create an alignment point if the line is broken by _.
+;; For example after "dim preserve foo(10), _" want to align after "preserve" instead of "dim".
+(setq -fb-alignable-keywords
+      ;;(concat (fb-rex "(\"|'|/')|:|")
+      (concat (fb-rex ":|")
+              (regexp-join-symbols
+               (split-string "then else while until to case shared preserve"))))
+
+(defun fb--indent-column-for-continued-line ()
+  "Return a column number to indent to, or nil.
+This function only handles the case where the current line is a continuation
+of the previous, otherwise it returns nil."
+  (save-excursion
+    (let ((case-fold-search t))
+      ;; Look last _ line continuation, if any
+      (when (fb--find-continuation-prev-line)
+        (let ((before-last-continuation (match-beginning 0))
+              (last-point -1)
+              best)
+                                        ;(goto-char before-last-continuation)
+          (fb-back-to-initial-indentation)
+          (save-restriction
+            ;; Consider everything between the initial start of the continued line
+            ;; and the start of the line we're indenting
+            (narrow-to-region (point) before-last-continuation)
+
+            ;; The default if we have no unclosed sexp is to align after the
+            ;; first symbol on the initial line.
+            (forward-symbol 1)  ; Can't skip over _ on the line by itself, because we narrowed the buffe
+            ;; ...but if there are certain keywords like PRESERVE present, align after them instead.
+            ;; (This isn't totally satisfactory, and line-end-position may not be right either)
+            (while (re-search-forward -fb-alignable-keywords (line-end-position) t))
+            ;; Skip over punctuation or whitespace, so given "foo = bar _", align to "bar"
+            (skip-syntax-forward " .")
+            (when (= (point) before-last-continuation)
+              ;; Ignore any whitespace before the _ so that we don't align to the _
+              (skip-syntax-backward " "))
+            (setq best (point))
+
+            ;; Look for an open sexp, ie. a (, { or [ with no matching ), } or ], and if so indent just past it.
+            (while (> (point) last-point)
+              (setq last-point (point))
+              (condition-case nil
+                  ;; Can use fb-skip-variable-decl instead
+                  (forward-sexp)
+                (scan-error
+                 ;; This should be an "Unbalanced parenthesis" error,
+                 ;; though it could also be that there's an extra ), ] or }.
+                 ;; Skip over punctation, eg "foo = {" after the "foo" we want to move up to the {
+                 (skip-syntax-forward ".")
+                 (skip-syntax-forward " ")
+                 (skip-syntax-forward "(")
+                 (setq best (point)))))
+
+            ;; FIXME: given the following, we would align to the "(" instead of "bar"
+            ;; foo ( _
+            ;;        bar, _
+            )
+          ;; Exited narrowing, so can get actual column number
+          (goto-char best)
+          (current-column))))))
+
+(defun fb--indent-column ()
+  "Return the best-guess indentation of the current line, by looking for
+opening and closing brackets on the current and previous non-blank line and multiplying
+by fb-indent-level."
+  (or (fb--indent-column-for-continued-line)
+      (save-excursion
+        (back-to-indentation)
+        (+ (* fb-indent-level
+              ;; end (if|with|scope|select|sub|function|operator|constructor|destructor|type|enum|...)
+              (+ (if (looking-at (fb-rex "([]`)}]|(end` [a-z]+|else|elseif|loop|wend|next|case|#endif|#else|#elseif|#endmacro|endtest)\\_>)"))
+                     -1 0)
+                 (cl-block nil
+                   ;; Skip whitespace, blank lines and comments backwards. Doesn't work properly
+                   ;; if already in a comment
+                   (forward-comment -9999)
+                   ;; Either the line ends in one of these...
+                   (when (looking-back (fb-rex "\\_<(then|else)"))
+                     (cl-return 1))
+                   (fb-back-to-initial-indentation)
+                   ;; ...or begins with one of these
+                   (when (looking-at (concat
+                                      (fb-rex "(for|with|case|while|do|select|scope|withnode|readnode|#if|#ifdef|#ifndef|#elseif|")
+                                      -fb-toplevel-start
+                                      "\\)\\b"))
+                     (cl-return 1))
+                   0)))
+           (progn
+             (fb-back-to-initial-indentation)
+             (current-column))))))
+
+(defun fb-indent-line ()
+  "Indent current line to the same
+level as previous line +/- fb-indent-level if previous non-blank line ends in ({[, )}],
+or begin, end. If run multiple times in a row, then instead indents the line by
+an extra fb-indent-level each time."
+  (interactive)
+  (let ((blank-line
+         (save-excursion
+           (beginning-of-line)
+           (skip-chars-forward " \t")
+           (looking-at "\n")))
+        (col
+         (if (eq this-command last-command)
+             (save-excursion
+               (back-to-indentation)
+               (+ (current-column) fb-indent-level))
+           (fb--indent-column))))
+    (if blank-line
+        (progn
+          (delete-horizontal-space)
+          (indent-to col))
+      (save-excursion
+        (back-to-indentation)
+        (delete-horizontal-space)
+        (indent-to col))
+      (if (< (current-column) col)   ; Shouldn't happen?
+          (back-to-indentation)))))
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Interactive functions
+
+
+(defun fb-split-indent-line ()
+  "Splits the current line at point, adding a _ line continuation
+and indenting the new line. Can split in the middle of a string or comment!"
+  (interactive)
+  (let ((state (syntax-ppss)))
+    (cond ((nth 3 state)                ; In a string (and it is the string char)
+           (insert (nth 3 state))
+           (insert " _")
+           (newline)
+           (insert (nth 3 state))
+           (indent-according-to-mode))
+          ((nth 4 state)                ; In a comment
+           (indent-new-comment-line))
+          (t
+           (delete-horizontal-space)    ; Delete spaces around point
+           (insert " _")
+           (newline-and-indent)))))
+
+;; Not used
+(defun fb-auto-capitalise-self-insert-function ()
+  (when (and (eq (char-before) last-command-event) ; Sanity check.
+             (memq (char-syntax last-command-event) '(?\( ? )))
+    (save-excursion
+      (backward-char)
+      (when (and (symbol-at-point)
+                 (or (re-search-backward (concat "\\_<" (symbol-at-point) "\\_>")
+                                         nil t)
+                     (re-search-forward (concat "\\_<" (symbol-at-point) "\\_>")
+                                         nil t)))
+        ;;TODO
+        ))))
+
+(defun fb-make-for-loop (iter end)
+  "Insert a FOR loop with integer index, prompting for variable name and end bound."
+  (interactive "sLoop variable: \nsEnd point: \n")
+  (indent-according-to-mode)
+  (insert "for " iter " as integer = 0 to " end "\n\nend if")
+  (indent-according-to-mode)
+  (previous-line)
+  (indent-according-to-mode))
+
+(defun fb-doc-pagename (name)
+  "Return the wakka page name for a given symbol. Incomplete!"
+  (when (string-match "^#\\s *\\(.*\\)$" name)
+    (setq name (concat "Pp" (match-string 1 name))))
+  (when (string-match "^__\\(.*\\)__$" name)
+    (setq name (concat "Dd"
+                       ;; Remove underscores
+                       (replace-regexp-in-string "_" "" (match-string 1 name)))))
+  ;; TODO: support operators  https://www.freebasic.net/wiki/CatPgOpIndex
+  (setq name (concat "KeyPg" (capitalize name)))
+  name)
+
+(defun fb-lookup-doc (name)
+  "Open a web browser for a page in the FB manual documenting a function/keyword."
+  (interactive
+   (list (prompt-with-default-at-point
+          "Lookup in manual? ")))
+  (browse-url (concat "http://www.freebasic.net/wiki/wikka.php?wakka=" (fb-doc-pagename name))))
+
+(defun fb-beginning-of-defun (&optional arg)
+  "Move point to start of line starting a function or other toplevel block.
+arg tells which block: 1 means last defun start, 2 the one before, -1 the one after, etc"
+  (interactive "p")
+  (if (or (null arg) (= arg 0)) (setq arg 1))
+  (search-backward-regexp (concat "^" -fb-toplevel-start )
+                          nil :move-to-start arg))
+
+(defun fb-end-of-defun (&optional arg)
+  "Move point past last line of a function or other toplevel block.
+arg tells which block: 1 means next end, 2 the one after, -1 the one before, etc"
+  (interactive "p")
+  (if (or (null arg) (= arg 0)) (setq arg 1))
+  (when (search-forward-regexp
+         ;; Accept only ')' or 'end' or 'end <fb-toplevel>' or 'endTest' on a line by
+         ;; itself, excluding whitespace and comments
+         (concat (fb-rex "^`)|^end[ \t]*(\n|\\s<|test)|^#` *endmacro|^end *(") -fb-toplevel-start "\\)")
+         nil :move-to-end arg)
+    (forward-line)))
+
+;; Not used; not complete or useful -- need a fill-paragraph implementation
+(defun fb-adaptive-fill ()
+  (when (looking-at "[ \t]*'[ \t]*")
+    (match-string 0)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Syntax highlighting (font-lock)
+
+
+;; Adapted from my fb-mark-arg in misc/fb-utils.el
+(defun fb-skip-variable-decl (args &optional limit pushmark)
+  "In the middle of an argument list, move point to end of the args-th arg on from point,
+and return the position of the start (no earlier than where we started (also set as
+the mark if called interactively."
+  ;; limit defaults to nil, the others default to 1 when called interactively
+  (interactive "p\ni\np") ;"nSkip forward how many args? ")
+  (when (char-equal (char-after) ?, ) (forward-char))
+  (when pushmark
+    (push-mark))
+  (let ((start (point)) char (argno 1))
+    (save-restriction
+      (when limit
+        (narrow-to-region start limit))
+      (catch 'done
+        (while		;when search fails, go to limit and break if on last arg
+            (re-search-forward "[,([{\"]" limit (if (eq argno args) 0 nil))
+          ;;(backward-char)
+          (setq char (char-before))
+          (cond ((eq (char-syntax char) ?\( ) (backward-char) (forward-sexp 1))
+                ;;((char-equal char ?\) ) (error "not enough arguments"))
+                ((char-equal char ?, ) (if (<= (incf argno) args) (set-mark (1- (point)))
+                                         (throw 'done nil)))
+					;I assume forward-sexp uses normal escape codes, not ideal
+                ((char-equal char ?\") (backward-char) (forward-sexp 1))))))
+    ;;(forward-char))))
+    (when (< (point) (or limit (buffer-end 1))) (backward-char))
+    ;; (when (> args 0) (backward-char)))
+    start))
+
+(defun fb-match-variable-decl (&optional end-pos)
+  "This parses two forms of variable declaration, as below, setting the match data and point.
+Point is moved to the end of this var declaration (skipping initialisers).
+
+  [byref|byval] varname [as typename] [= initialiser]
+The type is optional to allow 'dim as integer x, y'.
+BUG: if there are array dims after varname, 'as typename' is missed!
+
+  as typename varname [= initialiser]
+In this case, byref|byval must have been skipped by the caller.
+varname is not in the match data, instead point is left in front of varname
+so that a repeat call will match it."
+  ;;(interactive)
+  (let ((case-fold-search t))
+    (when (null end-pos) (setq end-pos (line-end-position)))
+    (let ((arg-start (point)) ret)
+      ;; Ignore errors due to unbalanced parens
+      (condition-case nil
+          ;; Get start and end (point) of the decl
+          (setq arg-start (fb-skip-variable-decl 1 end-pos))
+        (scan-error))
+      (setq end-pos (point))
+      ;; point is now positioned by a comma or the end
+      (goto-char arg-start)
+
+      ;; Begins with 'as'?
+      (if (looking-at "\\s *\\_<as\\_>")
+          (progn
+            ;; Skip to end of type and variable name (allow * for fixed strings)
+            ;;(search-forward-regexp "[^=('/,\n]*" end-pos)
+            (search-forward-regexp "[ ._a-z0-9*]*" end-pos)
+            ;; Back over the variable name
+            ;;(skip-syntax-backward " " arg-start)
+            (search-backward-regexp "\\_<[._a-z0-9]+\\s *" arg-start t)
+            ;;(message "skipped back over %s" (match-string 0))
+            (setq end-pos (point))
+            (goto-char arg-start)
+            ;; Match just the 'as type', byref/byval and variable name blank
+            (setq ret (search-forward-regexp
+                       (fb-rex "` *\\_<()()(as` +([ ._a-z0-9*]+)?)") end-pos t)))
+        (setq ret (search-forward-regexp
+                   (fb-rex "` *(byref|byval)?` *([._a-z0-9]+)(` +as` +([ ._a-z0-9*]+))?") end-pos t)))
+      ;; (fb-rex "` *([a-z0-9_.]+)(` +as` +[a-z0-9_. ]+)?") end-pos t))
+      ;; (message "match: total(%s), %s , %s, %s, %s" (match-string 0)
+      ;;          (match-string 1) (match-string 2) (match-string 3) (match-string 4))
+
+      (goto-char end-pos)
+      ret)))
+
+;; TODO: figure out how to use a good default if the current style is light-coloured
+(defface fb-emph-face
+;(face-spec-set 'fb-emph-face
+  '((t :inherit default-face :background "#7070A0" :weight bold))
+  "Face used for : statement separator.")
+
+(defvar fb-font-lock-keywords
+  (list
+   ;;; Do these first, so they override everything except comments and strings
+   ;; (cons "=\\|@" font-lock-variable-name-face)
+   (cons ":\\|\\_<_\\_>" ''fb-emph-face) ;font-lock-warning-face)
+   ;; Don't highlight a : after a case. You can write 'case asc("="):'
+   (list "\\_<case\\_>\\(?:[ ,][-._a-z0-9<>()]*\\|\"[^\"]*\"\\)+?\\(:\\)" 1 ''default t)
+
+   ;;; Preprocesser #blocks and special functions/keywords
+   (cons (fb-rex "^` *#` *[a-z_]+( +once)?") font-lock-preprocessor-face)
+   ;; Preprocessor intrinsic defines (don't explicitly enumerate the large number of __FB_*__ defines)
+   (cons (fb-rex "\\_<__(fb_[a-z0-9_]+|file|file_nq|path|function|function_nq|line|date|date_iso|time)__\\_>")
+         font-lock-preprocessor-face)
+   (cons (fb-rex "\\_<(defined|namespace|using|option)\\_>|##?")
+         font-lock-preprocessor-face)
+   ;; #define and #macro names and arglists. (TODO: The arglist is optional for macros?)
+   (list (fb-rex "^` *#` *(define|macro)` +([._a-z0-9]+)` *`(([^)]*)`)")
+         '(2 font-lock-function-name-face)
+         '(3 font-lock-variable-name-face))
+   ;; Highlight define with no args as a variable/const rather than function.
+   (list (fb-rex "^` *#` *define` +([._a-z0-9]+)")
+         '(1 font-lock-variable-name-face))
+
+   ;;; Keywords and flow control
+   (list (regexp-join-symbols -fb-keywords)
+         '(0 font-lock-keyword-face keep))
+
+   ;; FIXME: in "seq.next", "next" gets highlighted because . is punctuation, not symbol
+
+   ;;; Function/Sub/Type/etc names and arglists
+   ;; The first regex finds the function name and the start of the arglist, if any.
+   ;; We skip over the ( at the end, as it would cause fb-match-variable-decl to skip everything.
+   ;; We might catch some function attributes like 'alias "foo"', or even either type of comment,
+   ;; or "extends", but because we use 'keep this doesn't matter.
+   ;; Also, the function name is optional, to support 'as sub(...)' type declarations.
+   ;; FIXME: "function debug_surfaces_list as integer" without brackets is allowed too
+   (list (concat (fb-rex "^` *(?:declare` *)?(?:(?:virtual|abstract)` *)?(") -fb-toplevel-start (fb-rex ")([^`(\n]*)`(?"))
+         '(1 font-lock-keyword-face)   ;Also done below
+         '(2 font-lock-function-name-face keep)
+         ;; Just highlight the whole arglist one colour
+         ;; '("(\\([^)]*\\))" nil nil
+         ;;   (1 font-lock-variable-name-face keep)))
+         '(fb-match-variable-decl nil nil
+                        ;;(1 font-lock-builtin-face keep noerror)     ; byref/byval
+                        (2 font-lock-variable-name-face keep noerror) ; variable name
+                        (4 font-lock-type-face keep noerror)))        ; type
+
+   ;;; Highlight variable declarations (DIM, EXTERN, etc)
+   (list (concat "\\(" (regexp-join-symbols '("dim" "redim" "var" "const" "extern" "static"))
+                 (fb-rex ")` +(shared |byref |preserve )*"))  ;"\\_<dim\\_>"
+         ;;'(0 font-lock-keyword-face keep)  ;; dim as well as shared, static, etc. Done below
+         '(fb-match-variable-decl nil nil
+                        ;;(1 font-lock-builtin-face keep noerror)  ; byref/byval
+                        (2 font-lock-variable-name-face keep noerror)  ; variable name
+                        (4 font-lock-type-face keep noerror)))   ; type
+   ;; FOR is simpler, as the "AS type" is handled separately
+   (list (fb-rex "\\_<for` +([._a-z0-9]+)` +as") '(1 font-lock-variable-name-face))
+
+   ;;; Highlight (more) types
+   ;; The above doesn't catch types after array bounds var() as foo. This also is needed for TYPE members.
+   (list "\\_<as\\_>\\([\t ._a-z0-9*]+\\)"
+         '(1 font-lock-type-face keep))
+
+   ;;; Declaration-related keywords
+   (list (regexp-join-symbols
+          (split-string "byval as any extends is"))
+         '(0 font-lock-keyword-face keep))
+   (list (regexp-join-symbols '("byref"))
+         '(0 font-lock-warning-face keep))
+
+   ;;; Other toplevel blocks
+   (cons -fb-toplevel-start font-lock-keyword-face) ;; This is needed to highlight 'sub' in 'end sub', etc
+   (cons "endtest" font-lock-keyword-face)   ;; Extension (TODO: add a variable for it)
+
+   ;;; Operators and builtin functions
+   ;; "= ( ) <> + - * / ^ ,"
+   ;; (split-string "mid left right instr chr asc ubound lbound new delete allocate callocate deallocate
+   ;;                 int cint trunc fix mod "))
+
+   ;;; Special operators
+   (cons (regexp-join-symbols
+          (split-string "or and not orelse andalso sizeof typeof cast cptr iif"))
+         font-lock-keyword-face)  ;font-lock-builtin-face)
+   ))
+
+(defvar fb-font-lock-defaults
+  ; Ignore case while fontifying
+  '(fb-font-lock-keywords nil t))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-derived-mode fb-mode prog-mode "FreeBASIC"
+  "Major mode to edit FreeBasic or RELOADBasic."
+  (set-syntax-table fb-syntax-table)
+  (setq-local font-lock-defaults fb-font-lock-defaults)
+  (setq-local comment-start "'")
+  (setq-local comment-end "")
+  (setq-local comment-start-skip "/?'+[ \t]*")
+  ;; (setq-local comment-start "/'")
+  ;; (setq-local comment-end "'/")
+  (setq-local comment-end-skip "[ \t]*'+/")
+  (setq-local beginning-of-defun-function 'fb-beginning-of-defun)
+  (setq-local end-of-defun-function 'fb-end-of-defun)
+  (setq-local indent-line-function 'fb-indent-line)
+  ;; FIXME: if user changes this, a lot of functions will break
+  (setq-local case-fold-search t)
+
+  ;; Support ' for FreeBasic comments (just add ' to the default value)
+  (setq-local adaptive-fill-regexp
+              (purecopy "[ \t]*\\([-–!|'#%;>*·•‣⁃◦]+[ \t]*\\)*"))
+  ;; Alternative to changing adaptive-fill-regexp
+  ;(setq-local adaptive-fill-function #'fb-adaptive-fill)
+
+  ;; Replace C-M-j which adds a new line and indent only while in a comment block
+  (local-set-key "\C-\M-j" 'fb-split-indent-line)
+
+  (local-set-key "\C-c\C-f" 'fb-make-for-loop)
+  (local-set-key "\C-c\C-h" 'fb-lookup-doc)
+  )
+
+(require 'compile)
+
+;; Recognise fbc's errors
+(push '("^\\([^(\n]+\\)(\\([0-9]+\\)) \\(\\(error\\)\\|\\(warning\\)\\) [0-9()]+:" 1 2 nil (5))
+      compilation-error-regexp-alist)
