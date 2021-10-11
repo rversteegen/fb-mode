@@ -23,7 +23,7 @@
 
 ;;; Code:
 
-(add-to-list 'auto-mode-alist '("\\.\\(bi\\|bas\\)\\'" . fb-mode))
+(add-to-list 'auto-mode-alist '("\\.\\(bi\\|bas\\|rbas\\)\\'" . fb-mode))
 
 (eval-when-compile (require 'cl))  ; Using cl-lib doesn't work properly, and I don't know why
 (require 'cc-mode)   ; For c-mode-syntax-table
@@ -409,6 +409,10 @@ arg tells which block: 1 means next end, 2 the one after, -1 the one before, etc
 (push '("^\\([^(\n]+\\)(\\([0-9]+\\)) \\(\\(error\\)\\|\\(warning\\)\\) [0-9()]+:" 1 2 nil (5))
       compilation-error-regexp-alist)
 
+;; Recognise reloadbasic errors
+(push '("^On line \\([0-9]+\\) of \\([^:]+\\):" 2 1 nil)
+      compilation-error-regexp-alist)
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Syntax highlighting (font-lock)
@@ -603,7 +607,7 @@ so that a repeat call will match it."
 
 
 (define-derived-mode fb-mode prog-mode "FreeBASIC"
-  "Major mode to edit FreeBASIC."
+  "Major mode to edit FreeBASIC/ReloadBASIC."
   (set-syntax-table fb-syntax-table)
   (setq-local font-lock-defaults fb-font-lock-defaults)
   (setq-local comment-start "'")
