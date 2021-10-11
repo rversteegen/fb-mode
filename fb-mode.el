@@ -1,7 +1,7 @@
 ;;; fb-mode.el --- An Emacs major mode for the FreeBASIC programming language
 
 ;; Author:     Ralph Versteegen <rbversteegen@gmail.com>
-;; Version:    1.0.1
+;; Version:    1.1.0
 ;; Keywords:   languages
 
 ;; This software is in the public domain and is provided with absolutely no warranty.
@@ -88,7 +88,7 @@ There must be no regex operators in the words!"
 
 ;; Start of a function or type. Used for syntax highlighting
 (defconst fb-toplevel-start
-  (fb-rex "\\_<(?:(?:(?:public|private|static|local)?` *(?:function|sub|constructor|destructor|operator|property|starttest))|(?:#` *macro|type|union|enum))\\_>"))
+  (fb-rex "\\_<(?:(?:(?:public|private|static)?` *(?:function|sub|constructor|destructor|operator|property))|(?:#` *macro|type|union|enum))\\_>"))
 
 ;; TODO: incomplete
 ;; sub, function, etc are excluded because they're handled elsewhere
@@ -100,8 +100,7 @@ There must be no regex operators in the words!"
                  inp asm
                  declare overload explicit virtual abstract extends
                  __function __thiscall threadcall
-                 export naked alias cdecl pascal stdcall overload override
-                 retrace withnode readnode loadarray ignoreall"))  ;; RELOADbasic extensions
+                 export naked alias cdecl pascal stdcall overload override"))
 
 
 ;(Not used) End of expression due to delimiter, ), comment, or newline
@@ -216,7 +215,7 @@ by fb-indent-level."
         (back-to-indentation)
         (+ (* fb-indent-level
               ;; end (if|with|scope|select|sub|function|operator|constructor|destructor|type|enum|...)
-              (+ (if (looking-at (fb-rex "([]`)}]|(end` [a-z]+|else|elseif|loop|wend|next|case|#endif|#else|#elseif|#endmacro|endtest)\\_>)"))
+              (+ (if (looking-at (fb-rex "([]`)}]|(end` [a-z]+|else|elseif|loop|wend|next|case|#endif|#else|#elseif|#endmacro)\\_>)"))
                      -1 0)
                  (cl-block nil
                    ;; Skip whitespace, blank lines and comments backwards. Doesn't work properly
@@ -374,9 +373,9 @@ arg tells which block: 1 means next end, 2 the one after, -1 the one before, etc
   (interactive "p")
   (if (or (null arg) (= arg 0)) (setq arg 1))
   (when (search-forward-regexp
-         ;; Accept only ')' or 'end' or 'end <fb-toplevel>' or 'endTest' on a line by
+         ;; Accept only ')' or 'end' or 'end <fb-toplevel>' on a line by
          ;; itself, excluding whitespace and comments
-         (concat (fb-rex "^`)|^end[ \t]*(\n|\\s<|test)|^#` *endmacro|^end *(") fb-toplevel-start "\\)")
+         (concat (fb-rex "^`)|^end[ \t]*(\n|\\s<)|^#` *endmacro|^end *(") fb-toplevel-start "\\)")
          nil :move-to-end arg)
     (forward-line)))
 
@@ -571,7 +570,6 @@ so that a repeat call will match it."
 
    ;;; Other toplevel blocks
    (cons fb-toplevel-start font-lock-keyword-face) ;; This is needed to highlight 'sub' in 'end sub', etc
-   (cons "endtest" font-lock-keyword-face)   ;; Extension (TODO: add a variable for it)
 
    ;;; Operators and builtin functions
    ;; "= ( ) <> + - * / ^ ,"
