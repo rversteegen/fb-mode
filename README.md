@@ -23,7 +23,8 @@ You likely will want to customise the `fb-emph-face` (used for `:` and `_` token
   - Amount of indentation is controlled by the `fb-indent-level` variable
 - Commenting/uncommenting, and `fill-paragraph` support for comments
 - C-c C-h to lookup a symbol (default under point) in the manual in a web browser tab (note, doesn't work for many builtins)
-- Adds `compile-mode` support for `fbc` error/warning messages
+- F5 to run `compile`, with a suitable default command (`fbc <file>`, `make` or `scons`)
+  - `compile-mode` support for `fbc` error/warning messages so you can jump to the line
 - `beginning-of-defun`/`end-of-defun` (C-M-a/C-M-e) support
 - C-M-j to split the current line at point (possibly in middle of a string or comment), adding a _ line continuation
 and indenting.
@@ -33,7 +34,6 @@ and indenting.
 - Syntax highlighting of builtin functions and types; some keywords like `data` are also missing.
 - Keyword/builtin completion
 - Jumping to definitions (tags)
-- Compile, run, or debug functions/keys (but you can use `compile` and jump to errors)
 - Menubar items
 
 ## Alternative
@@ -42,5 +42,5 @@ and indenting.
 The two modes are fairly distinct in their feature sets.
 
 freebasic-mode highlights based on a near-complete (though out of date) list of all FB keywords and builtin functions.
-It has functions/hotkeys to compile and run the file, and menu bar items.
+It has functions/keys to compile and (Unix only) run the file, and menu bar items.
 However, it currently has no support for line continuations, minimal support for multiline comments (can only highlight them), and suffers various bugs in syntax highlighting and indentation.

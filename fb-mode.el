@@ -15,13 +15,12 @@
 ;; You will likely want to set the fb-emph-face to something suitable for your theme,
 ;; and customise fb-indent-level, the number of spaces to indent by.
 ;;
-;; Special key combos:
+;; Available keys:
 ;;  C-c C-h:  Lookup the symbol at point in the manual (incomplete)
+;;  F5:       Run `compile', suitably defaulting to fbc, make or scons.
 ;;  C-M-j:    Split the current line at point (possibly in the middle of a comment or string)
 ;;  C-c C-f:  Insert a simple FOR loop
 
-
-(provide 'fb-mode)
 
 (add-to-list 'auto-mode-alist '("\\.\\(bi\\|bas\\)\\'" . fb-mode))
 
@@ -357,6 +356,30 @@ arg tells which block: 1 means next end, 2 the one after, -1 the one before, etc
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Compiling
+
+
+(defun fb--set-compile-command ()
+  "Called from fb-mode-hook to set the default command for `compile' to run either 'fbc', 'make', or 'scons'."
+  ;; If there's a makefile, stick to default ("make -k ")
+  (unless (or (file-exists-p "makefile")
+	      (file-exists-p "Makefile"))
+    (setq-local compile-command
+                (if (cl-some 'file-exists-p '("SConstruct" "Sconstruct" "sconstruct"
+                                              "SConstruct.py" "Sconstruct.py" "sconstruct.py)"))
+                    "scons "
+		  (concat "fbc "
+			  (if buffer-file-name
+			      (shell-quote-argument (file-relative-name buffer-file-name))))))))
+
+(require 'compile)
+
+;; Recognise fbc's errors
+(push '("^\\([^(\n]+\\)(\\([0-9]+\\)) \\(\\(error\\)\\|\\(warning\\)\\) [0-9()]+:" 1 2 nil (5))
+      compilation-error-regexp-alist)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Syntax highlighting (font-lock)
 
 
@@ -537,8 +560,9 @@ so that a repeat call will match it."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+
 (define-derived-mode fb-mode prog-mode "FreeBASIC"
-  "Major mode to edit FreeBasic or RELOADBasic."
+  "Major mode to edit FreeBASIC."
   (set-syntax-table fb-syntax-table)
   (setq-local font-lock-defaults fb-font-lock-defaults)
   (setq-local comment-start "'")
@@ -559,15 +583,14 @@ so that a repeat call will match it."
   ;; Alternative to changing adaptive-fill-regexp
   ;(setq-local adaptive-fill-function #'fb-adaptive-fill)
 
-  ;; Replace C-M-j which adds a new line and indent only while in a comment block
-  (local-set-key "\C-\M-j" 'fb-split-indent-line)
+  (fb--set-compile-command))
 
-  (local-set-key "\C-c\C-f" 'fb-make-for-loop)
-  (local-set-key "\C-c\C-h" 'fb-lookup-doc)
-  )
 
-(require 'compile)
+;; Replace C-M-j which adds a new line and indent only while in a comment block
+(define-key fb-mode-map "\C-\M-j" 'fb-split-indent-line)
+(define-key fb-mode-map "\C-c\C-f" 'fb-make-for-loop)
+(define-key fb-mode-map "\C-c\C-h" 'fb-lookup-doc)
+(define-key fb-mode-map (kbd "<f5>") 'compile)
 
-;; Recognise fbc's errors
-(push '("^\\([^(\n]+\\)(\\([0-9]+\\)) \\(\\(error\\)\\|\\(warning\\)\\) [0-9()]+:" 1 2 nil (5))
-      compilation-error-regexp-alist)
+
+(provide 'fb-mode)
