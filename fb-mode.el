@@ -21,10 +21,11 @@
 ;;  C-M-j:    Split the current line at point (possibly in the middle of a comment or string)
 ;;  C-c C-f:  Insert a simple FOR loop
 
+;;; Code:
 
 (add-to-list 'auto-mode-alist '("\\.\\(bi\\|bas\\)\\'" . fb-mode))
 
-(require 'cl)  ; TODO: figure out how to replace with cl-lib
+(eval-when-compile (require 'cl))  ; Using cl-lib doesn't work properly, and I don't know why
 (require 'cc-mode)   ; For c-mode-syntax-table
 
 (defcustom fb-indent-level 4  ;c-basic-offset
@@ -35,6 +36,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Generic utility functions
+
 
 (defun fb-rex (string)
   "Form a regexp by escaping (, | and ) characters, unless prefixed with `.
@@ -47,27 +49,27 @@ Also '` ' becomes '\\\\s ' (a whitespace character).
     (replace-regexp-in-string "[(|)]" "\\\\\\\&" string))))
 ;(assert (equal (fb-rex "a|b`( ` ") "a\\|b( \\s "))
 
-(defun regexp-join-symbols (words)
+(defun fb-regexp-join-symbols (words)
   "Return a regexp matching any of a list of symbols, without any numbered groups.
 There must be no regex operators in the words!"
   ;(mapconcat (lambda (x) (concat "\\_<" x "\\_>")) words "\\|"))
   ;(concat "\\_<\\(?:" (apply 'join "\\|" words) "\\)\\_>"))
   (concat "\\_<" (regexp-opt words) "\\_>"))
 
-(defun prompt-with-default (prompt default)
+(defun fb-prompt-with-default (prompt default)
   "Prompt for a string, with a default string (possibly nil)"
   (let*
-      ((prompt-with-default (if default
-                                (concat prompt "(default: " default ") ")
-                              prompt))
-       (input (read-from-minibuffer prompt-with-default nil nil nil nil default)))
+      ((prompt-and-default (if default
+                               (concat prompt "(default: " default ") ")
+                             prompt))
+       (input (read-from-minibuffer prompt-and-default nil nil nil nil default)))
     (if (equal "" input)
         default
       input)))
 
-(defun prompt-with-default-at-point (prompt-text &optional not-regexp)
+(defun fb-prompt-with-default-at-point (prompt-text &optional not-regexp)
   "Prompt for a string, with default being the tag at point, if any"
-  (prompt-with-default
+  (fb-prompt-with-default
     prompt-text
     ;; -as-regexp variant used for two reasons:
     ;; firstly, want a regexp, secondly can be overridden with find-tag-default-function
@@ -85,25 +87,25 @@ There must be no regex operators in the words!"
 (modify-syntax-entry ?# "w" fb-syntax-table)
 
 ;; Start of a function or type. Used for syntax highlighting
-(setq -fb-toplevel-start
-      (fb-rex "\\_<(?:(?:(?:public|private|static|local)?` *(?:function|sub|constructor|destructor|operator|property|starttest))|(?:#` *macro|type|union|enum))\\_>"))
+(defconst fb-toplevel-start
+  (fb-rex "\\_<(?:(?:(?:public|private|static|local)?` *(?:function|sub|constructor|destructor|operator|property|starttest))|(?:#` *macro|type|union|enum))\\_>"))
 
 ;; TODO: incomplete
 ;; sub, function, etc are excluded because they're handled elsewhere
-(setq -fb-keywords
-      (split-string "if then else elseif end with while until wend for step next do loop to scope select case
-                     exit continue break return goto gosub resume
-                     shared preserve dim redim var const extern static common erase
-                     new delete
-                     inp asm
-                     declare overload explicit virtual abstract extends
-                     __function __thiscall threadcall
-                     export naked alias cdecl pascal stdcall overload override
-                     retrace withnode readnode loadarray ignoreall"))  ;; RELOADbasic extensions
+(defconst fb-keywords
+  (split-string "if then else elseif end with while until wend for step next do loop to scope select case
+                 exit continue break return goto gosub resume
+                 shared preserve dim redim var const extern static common erase
+                 new delete
+                 inp asm
+                 declare overload explicit virtual abstract extends
+                 __function __thiscall threadcall
+                 export naked alias cdecl pascal stdcall overload override
+                 retrace withnode readnode loadarray ignoreall"))  ;; RELOADbasic extensions
 
 
-;end of expression due to delimiter, ), comment, or newline
-(setq -fb-end-of-var-decl "\\([\n,=']\\|/'\\)")
+;(Not used) End of expression due to delimiter, ), comment, or newline
+;(setq fb--end-of-var-decl "\\([\n,=']\\|/'\\)")
 
 ; comment start or newline : "\\s<\\|\n"
 
@@ -145,10 +147,10 @@ move to the real beginning of it (the first non-whitespace char on it)"
 
 ;; These are keywords which create an alignment point if the line is broken by _.
 ;; For example after "dim preserve foo(10), _" want to align after "preserve" instead of "dim".
-(setq -fb-alignable-keywords
+(defconst fb--alignable-keywords
       ;;(concat (fb-rex "(\"|'|/')|:|")
       (concat (fb-rex ":|")
-              (regexp-join-symbols
+              (fb-regexp-join-symbols
                (split-string "then else while until to case shared preserve"))))
 
 (defun fb--indent-column-for-continued-line ()
@@ -174,7 +176,7 @@ of the previous, otherwise it returns nil."
             (forward-symbol 1)  ; Can't skip over _ on the line by itself, because we narrowed the buffe
             ;; ...but if there are certain keywords like PRESERVE present, align after them instead.
             ;; (This isn't totally satisfactory, and line-end-position may not be right either)
-            (while (re-search-forward -fb-alignable-keywords (line-end-position) t))
+            (while (re-search-forward fb--alignable-keywords (line-end-position) t))
             ;; Skip over punctuation or whitespace, so given "foo = bar _", align to "bar"
             (skip-syntax-forward " .")
             (when (= (point) before-last-continuation)
@@ -227,7 +229,7 @@ by fb-indent-level."
                    ;; ...or begins with one of these
                    (when (looking-at (concat
                                       (fb-rex "(for|with|case|while|do|select|scope|withnode|readnode|#if|#ifdef|#ifndef|#elseif|")
-                                      -fb-toplevel-start
+                                      fb--toplevel-start
                                       "\\)\\b"))
                      (cl-return 1))
                    0)))
@@ -325,7 +327,7 @@ and indenting the new line. Can split in the middle of a string or comment!"
 (defun fb-lookup-doc (name)
   "Open a web browser for a page in the FB manual documenting a function/keyword."
   (interactive
-   (list (prompt-with-default-at-point
+   (list (fb-prompt-with-default-at-point
           "Lookup in manual? ")))
   (browse-url (concat "http://www.freebasic.net/wiki/wikka.php?wakka=" (fb-doc-pagename name))))
 
@@ -334,7 +336,7 @@ and indenting the new line. Can split in the middle of a string or comment!"
 arg tells which block: 1 means last defun start, 2 the one before, -1 the one after, etc"
   (interactive "p")
   (if (or (null arg) (= arg 0)) (setq arg 1))
-  (search-backward-regexp (concat "^" -fb-toplevel-start )
+  (search-backward-regexp (concat "^" fb-toplevel-start )
                           nil :move-to-start arg))
 
 (defun fb-end-of-defun (&optional arg)
@@ -345,7 +347,7 @@ arg tells which block: 1 means next end, 2 the one after, -1 the one before, etc
   (when (search-forward-regexp
          ;; Accept only ')' or 'end' or 'end <fb-toplevel>' or 'endTest' on a line by
          ;; itself, excluding whitespace and comments
-         (concat (fb-rex "^`)|^end[ \t]*(\n|\\s<|test)|^#` *endmacro|^end *(") -fb-toplevel-start "\\)")
+         (concat (fb-rex "^`)|^end[ \t]*(\n|\\s<|test)|^#` *endmacro|^end *(") fb-toplevel-start "\\)")
          nil :move-to-end arg)
     (forward-line)))
 
@@ -492,7 +494,7 @@ so that a repeat call will match it."
          '(1 font-lock-variable-name-face))
 
    ;;; Keywords and flow control
-   (list (regexp-join-symbols -fb-keywords)
+   (list (fb-regexp-join-symbols fb-keywords)
          '(0 font-lock-keyword-face keep))
 
    ;; FIXME: in "seq.next", "next" gets highlighted because . is punctuation, not symbol
@@ -504,7 +506,7 @@ so that a repeat call will match it."
    ;; or "extends", but because we use 'keep this doesn't matter.
    ;; Also, the function name is optional, to support 'as sub(...)' type declarations.
    ;; FIXME: "function debug_surfaces_list as integer" without brackets is allowed too
-   (list (concat (fb-rex "^` *(?:declare` *)?(?:(?:virtual|abstract)` *)?(") -fb-toplevel-start (fb-rex ")([^`(\n]*)`(?"))
+   (list (concat (fb-rex "^` *(?:declare` *)?(?:(?:virtual|abstract)` *)?(") fb-toplevel-start (fb-rex ")([^`(\n]*)`(?"))
          '(1 font-lock-keyword-face)   ;Also done below
          '(2 font-lock-function-name-face keep)
          ;; Just highlight the whole arglist one colour
@@ -516,7 +518,7 @@ so that a repeat call will match it."
                         (4 font-lock-type-face keep noerror)))        ; type
 
    ;;; Highlight variable declarations (DIM, EXTERN, etc)
-   (list (concat "\\(" (regexp-join-symbols '("dim" "redim" "var" "const" "extern" "static"))
+   (list (concat "\\(" (fb-regexp-join-symbols '("dim" "redim" "var" "const" "extern" "static"))
                  (fb-rex ")` +(shared |byref |preserve )*"))  ;"\\_<dim\\_>"
          ;;'(0 font-lock-keyword-face keep)  ;; dim as well as shared, static, etc. Done below
          '(fb-match-variable-decl nil nil
@@ -532,14 +534,14 @@ so that a repeat call will match it."
          '(1 font-lock-type-face keep))
 
    ;;; Declaration-related keywords
-   (list (regexp-join-symbols
+   (list (fb-regexp-join-symbols
           (split-string "byval as any extends is"))
          '(0 font-lock-keyword-face keep))
-   (list (regexp-join-symbols '("byref"))
+   (list (fb-regexp-join-symbols '("byref"))
          '(0 font-lock-warning-face keep))
 
    ;;; Other toplevel blocks
-   (cons -fb-toplevel-start font-lock-keyword-face) ;; This is needed to highlight 'sub' in 'end sub', etc
+   (cons fb-toplevel-start font-lock-keyword-face) ;; This is needed to highlight 'sub' in 'end sub', etc
    (cons "endtest" font-lock-keyword-face)   ;; Extension (TODO: add a variable for it)
 
    ;;; Operators and builtin functions
@@ -548,7 +550,7 @@ so that a repeat call will match it."
    ;;                 int cint trunc fix mod "))
 
    ;;; Special operators
-   (cons (regexp-join-symbols
+   (cons (fb-regexp-join-symbols
           (split-string "or and not orelse andalso sizeof typeof cast cptr iif"))
          font-lock-keyword-face)  ;font-lock-builtin-face)
    ))
@@ -559,6 +561,16 @@ so that a repeat call will match it."
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(defvar fb-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; Replace C-M-j which adds a new line and indent only while in a comment block
+    (define-key map "\C-\M-j" 'fb-split-indent-line)
+    (define-key map "\C-c\C-f" 'fb-make-for-loop)
+    (define-key map "\C-c\C-h" 'fb-lookup-doc)
+    (define-key map (kbd "<f5>") 'compile)
+    map))
 
 
 (define-derived-mode fb-mode prog-mode "FreeBASIC"
@@ -585,12 +597,6 @@ so that a repeat call will match it."
 
   (fb--set-compile-command))
 
-
-;; Replace C-M-j which adds a new line and indent only while in a comment block
-(define-key fb-mode-map "\C-\M-j" 'fb-split-indent-line)
-(define-key fb-mode-map "\C-c\C-f" 'fb-make-for-loop)
-(define-key fb-mode-map "\C-c\C-h" 'fb-lookup-doc)
-(define-key fb-mode-map (kbd "<f5>") 'compile)
 
 
 (provide 'fb-mode)
