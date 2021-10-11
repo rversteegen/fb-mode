@@ -1,7 +1,7 @@
 ;;; fb-mode.el --- An Emacs major mode for the FreeBASIC programming language
 
 ;; Author:     Ralph Versteegen <rbversteegen@gmail.com>
-;; Version:    1.0.0
+;; Version:    1.0.1
 ;; Keywords:   languages
 
 ;; This software is in the public domain and is provided with absolutely no warranty.
@@ -26,6 +26,7 @@
 (add-to-list 'auto-mode-alist '("\\.\\(bi\\|bas\\)\\'" . fb-mode))
 
 (require 'cl)  ; TODO: figure out how to replace with cl-lib
+(require 'cc-mode)   ; For c-mode-syntax-table
 
 (defcustom fb-indent-level 4  ;c-basic-offset
   "Number of spaces for each indentation step."
@@ -454,7 +455,7 @@ so that a repeat call will match it."
 
    ;;; Preprocesser #blocks and special functions/keywords
    (cons (fb-rex "^` *#` *[a-z_]+( +once)?") font-lock-preprocessor-face)
-   ;; Preprocessor intrinsic defines (don't explicitly enumerate the large number of __FB_*__ defines)
+   ;; Preprocessor intrinsic defines (TODO: explicitly enumerate the large number of builtin defines)
    (cons (fb-rex "\\_<__(fb_[a-z0-9_]+|file|file_nq|path|function|function_nq|line|date|date_iso|time)__\\_>")
          font-lock-preprocessor-face)
    (cons (fb-rex "\\_<(defined|namespace|using|option)\\_>|##?")
