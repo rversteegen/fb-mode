@@ -22,7 +22,7 @@ You likely will want to customise the `fb-emph-face` (used for `:` and `_` token
   - Full support for lines continued with `_`
   - Amount of indentation is controlled by the `fb-indent-level` variable
 - Commenting/uncommenting, and `fill-paragraph` support for comments
-- C-c C-h to lookup a symbol (default under point) in the manual in a web browser tab (note, doesn't work for many builtins)
+- C-c C-h to lookup a symbol (default under point) in the manual in a web browser tab (note, doesn't work for ambiguous and some other keywords)
 - F5 to run `compile`, with a suitable default command (`fbc <file>`, `make` or `scons`)
   - `compile-mode` support for `fbc` error/warning messages so you can jump to the line
 - `beginning-of-defun`/`end-of-defun` (C-M-a/C-M-e) support

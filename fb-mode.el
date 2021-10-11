@@ -16,7 +16,7 @@
 ;; and customise fb-indent-level, the number of spaces to indent by.
 ;;
 ;; Available keys:
-;;  C-c C-h:  Lookup the symbol at point in the manual (incomplete)
+;;  C-c C-h:  Lookup the symbol at point in the manual (doesn't work for all keywords)
 ;;  F5:       Run `compile', suitably defaulting to fbc, make or scons.
 ;;  C-M-j:    Split the current line at point (possibly in the middle of a comment or string)
 ;;  C-c C-f:  Insert a simple FOR loop
@@ -312,20 +312,49 @@ and indenting the new line. Can split in the middle of a string or comment!"
   (previous-line)
   (indent-according-to-mode))
 
+(defconst fb-operator-keyword-list
+  (split-string "and andalso eqv imp not or orelse xor shl shr let mod strptr varptr procptr is new delete")
+  "List of all operators that have no punctuation in the name (excluding for, next, step, cast
+although they are listed as operators in the manual since they can be overridden).")
+
 (defun fb-doc-pagename (name)
   "Return the wakka page name for a given symbol. Incomplete!"
-  (when (string-match "^#\\s *\\(.*\\)$" name)
+  (setq name (downcase name))
+  (when (string-match "^#\\s *\\(\\w*\\)$" name)
     (setq name (concat "Pp" (match-string 1 name))))
   (when (string-match "^__\\(.*\\)__$" name)
     (setq name (concat "Dd"
                        ;; Remove underscores
                        (replace-regexp-in-string "_" "" (match-string 1 name)))))
-  ;; TODO: support operators  https://www.freebasic.net/wiki/CatPgOpIndex
-  (setq name (concat "KeyPg" (capitalize name)))
-  name)
+  (let ((pagename
+         (or
+          ;; Check list of exceptions (currently, take first one if the operator is ambiguous)
+          ;; TODO: handle combining assignments like +=
+          (alist-get name
+                     '(("mod" . "OpModulus") ; ("end" . "Endblock") ("end" . "End")
+                       ("=" . "OpEqual") ("=" . "OpAssignment") ("=>" . "OpAssignment")
+                       ("@" . "OpAt") ("&" . "OpConcatConvert")
+                       ("<>" . "OpNotEqual") ("<" . "OpLessThan") (">" . "OpGreaterThan")
+                       ("<=" . "OpLessThanOrEqual") (">=" . "OpGreaterThanOrEqual")
+                       ("+" . "OpAdd") ("+" . "OpConcat")
+                       ("-" . "OpSubtract") ("-" . "OpNegate")
+                       ("*" . "OpMultiply") ("*" . "OpValueOf")
+                       ("/" . "OpDivide") ("\\" . "OpIntegerDivide") ("^" . "OpExponentiate")
+                       ("." . "OpMemberAccess") ("->" . "OpPtrMemberAccess")
+                       ("()" . "OpArrayIndex") ("[]" . "OpStringIndex") ("[]" . "OpPtrIndex")
+                       ("#" . "OpPpStringize") ("##" . "OpPpConcat")
+                       ("!" . "OpPpEscape") ("$" . "OpPpNoescape"))
+                     nil nil 'string=)
+          (when (seq-contains-p fb-operator-keyword-list name)
+            (concat "Op" (capitalize name)))
+          (capitalize name))))  ; Wiki URLs are case insensitive anyway
+    (concat "KeyPg" pagename)))
 
 (defun fb-lookup-doc (name)
-  "Open a web browser for a page in the FB manual documenting a function/keyword."
+  "Open a web browser for a page in the FB manual documenting a function/keyword.
+To lookup an operator which is punctation rather than a symbol,
+like ->, you have to manually type it at the prompt."
+  ;; TODO: add a list of special cases for ambiguous keywords, and prompt which page to open
   (interactive
    (list (fb-prompt-with-default-at-point
           "Lookup in manual? ")))
