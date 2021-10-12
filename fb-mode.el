@@ -1,7 +1,7 @@
 ;;; fb-mode.el --- An Emacs major mode for the FreeBASIC programming language
 
 ;; Author:     Ralph Versteegen <rbversteegen@gmail.com>
-;; Version:    1.1.0
+;; Version:    1.1.1
 ;; Keywords:   languages
 
 ;; This software is in the public domain and is provided with absolutely no warranty.
@@ -318,21 +318,28 @@ although they are listed as operators in the manual since they can be overridden
 
 (defun fb-doc-pagename (name)
   "Return the wakka page name for a given symbol. Incomplete!"
-  (setq name (downcase name))
-  (when (string-match "^#\\s *\\(\\w*\\)$" name)
-    (setq name (concat "Pp" (match-string 1 name))))
-  (when (string-match "^__\\(.*\\)__$" name)
-    (setq name (concat "Dd"
-                       ;; Remove underscores
-                       (replace-regexp-in-string "_" "" (match-string 1 name)))))
+  ;; Normalise case and remove spaces (e.g. in "# pragma reserve", "option dynamic"),
+  ;; though wiki URLs are case insensitive anyway
+  (setq name (replace-regexp-in-string " " "" (capitalize name)))
   (let ((pagename
          (or
-          ;; Check list of exceptions (currently, take first one if the operator is ambiguous)
+          ;; First check exceptions (currently, take first one if the name is ambiguous)
           ;; TODO: handle combining assignments like +=
-          (alist-get name
-                     '(("mod" . "OpModulus") ; ("end" . "Endblock") ("end" . "End")
-                       ("=" . "OpEqual") ("=" . "OpAssignment") ("=>" . "OpAssignment")
+          (alist-get (downcase name)
+                     '(;("end" . "End") ("end" . "Endblock")
+                       ;("static" . "Static") ("static" . "StaticMember")
+                       ;("const" . "Const") ("const" . "ConstMember")
+                       ;("constructor" . "Constructor") ("constructor" . "ModuleConstructor")
+                       ;("destructor" . "Destructor") ("destructor" . "ModuleDestructor")
+                       ;("byref" . "Byref") ("byref" . "ByrefFunction")  ("byref" . "ByrefVariables")
+                       ;("type" . "Type") ("type" . "TypeAlias")  ("type" . "TypeTemp")
+                       ;("extern" . "Extern") ("extern" . "ExternBlock")
+                       ;("base" . "Base") ("base" . "BaseInit")
+                       ("?" . "Print") ("?#" . "PrintPp") ("?using" . "Printusing")
                        ("@" . "OpAt") ("&" . "OpConcatConvert")
+                       ("mod" . "OpModulus") ("shl" . "OpShiftLeft") ("shr" . "OpShiftRight")
+                       ;("let" . "Let") ("let" . "LetList")
+                       ("=" . "OpEqual") ("=" . "OpAssignment") ("=>" . "OpAssignment")
                        ("<>" . "OpNotEqual") ("<" . "OpLessThan") (">" . "OpGreaterThan")
                        ("<=" . "OpLessThanOrEqual") (">=" . "OpGreaterThanOrEqual")
                        ("+" . "OpAdd") ("+" . "OpConcat")
@@ -341,18 +348,36 @@ although they are listed as operators in the manual since they can be overridden
                        ("/" . "OpDivide") ("\\" . "OpIntegerDivide") ("^" . "OpExponentiate")
                        ("." . "OpMemberAccess") ("->" . "OpPtrMemberAccess")
                        ("()" . "OpArrayIndex") ("[]" . "OpStringIndex") ("[]" . "OpPtrIndex")
+                       ("..." . "Dots")
                        ("#" . "OpPpStringize") ("##" . "OpPpConcat")
+                       ("#endmacro" . "PpMacro") ("#include" . "Include") ("#inclib" . "Inclib")
+                       ("once" . "Include")
                        ("!" . "OpPpEscape") ("$" . "OpPpNoescape"))
                      nil nil 'string=)
+          ;; Operators
           (when (seq-contains-p fb-operator-keyword-list name)
-            (concat "Op" (capitalize name)))
-          (capitalize name))))  ; Wiki URLs are case insensitive anyway
-    (concat "KeyPg" pagename)))
+            (concat "Op" name))
+          ;; Preprocessor
+          (when (string-match "^#\\(\\w*\\)$" name)
+            (setq name (concat "Pp" (match-string 1 name))))
+          ;; '$... preprocessor
+          (when (string-match "\\$\\(.*\\)" name)
+            (concat "Meta" (match-string 1 name)))
+          ;; Defines
+          (when (string-match "^__\\(.*\\)__$" name)
+            (setq name (concat "Dd" name)))
+          ;; else
+          name)))
+    (concat "KeyPg"
+            ;; Remove underscores
+            (replace-regexp-in-string "_" "" pagename))))
 
 (defun fb-lookup-doc (name)
   "Open a web browser for a page in the FB manual documenting a function/keyword.
 To lookup an operator which is punctation rather than a symbol,
 like ->, you have to manually type it at the prompt."
+  ;; TODO: detect tokens at point like "@" and "...", as well as preprocessor tokens containing
+  ;; whitespace like "# define" and keywords like "open #", "print using", "line input #".
   ;; TODO: add a list of special cases for ambiguous keywords, and prompt which page to open
   (interactive
    (list (fb-prompt-with-default-at-point
