@@ -1,10 +1,12 @@
 ;;; fb-mode.el --- An Emacs major mode for the FreeBASIC programming language
 
 ;; Author:     Ralph Versteegen <rbversteegen@gmail.com>
-;; Version:    1.0.1
+;; Version:    1.1.1
 ;; Keywords:   languages
 
 ;; This software is in the public domain and is provided with absolutely no warranty.
+
+;;; Commentary:
 
 ;; Usage:
 ;; Make sure the directory this file is in is in your load-path, and add
@@ -16,7 +18,7 @@
 ;; and customise fb-indent-level, the number of spaces to indent by.
 ;;
 ;; Available keys:
-;;  C-c C-h:  Lookup the symbol at point in the manual (doesn't work for all keywords)
+;;  C-c C-h:  Lookup a symbol/keyword (default at point) in the manual (doesn't handle ambiguous keywords)
 ;;  F5:       Run `compile', suitably defaulting to fbc, make or scons.
 ;;  C-M-j:    Split the current line at point (possibly in the middle of a comment or string)
 ;;  C-c C-f:  Insert a simple FOR loop
@@ -88,7 +90,7 @@ There must be no regex operators in the words!"
 
 ;; Start of a function or type. Used for syntax highlighting
 (defconst fb-toplevel-start
-  (fb-rex "\\_<(?:(?:(?:public|private|static|local)?` *(?:function|sub|constructor|destructor|operator|property|starttest))|(?:#` *macro|type|union|enum))\\_>"))
+  (fb-rex "\\_<(?:(?:(?:public|private|static)?` *(?:function|sub|constructor|destructor|operator|property))|(?:#` *macro|type|union|enum))\\_>"))
 
 ;; TODO: incomplete
 ;; sub, function, etc are excluded because they're handled elsewhere
@@ -100,8 +102,7 @@ There must be no regex operators in the words!"
                  inp asm
                  declare overload explicit virtual abstract extends
                  __function __thiscall threadcall
-                 export naked alias cdecl pascal stdcall overload override
-                 retrace withnode readnode loadarray ignoreall"))  ;; RELOADbasic extensions
+                 export naked alias cdecl pascal stdcall overload override"))
 
 
 ;(Not used) End of expression due to delimiter, ), comment, or newline
@@ -216,7 +217,7 @@ by fb-indent-level."
         (back-to-indentation)
         (+ (* fb-indent-level
               ;; end (if|with|scope|select|sub|function|operator|constructor|destructor|type|enum|...)
-              (+ (if (looking-at (fb-rex "([]`)}]|(end` [a-z]+|else|elseif|loop|wend|next|case|#endif|#else|#elseif|#endmacro|endtest)\\_>)"))
+              (+ (if (looking-at (fb-rex "([]`)}]|(end` [a-z]+|else|elseif|loop|wend|next|case|#endif|#else|#elseif|#endmacro)\\_>)"))
                      -1 0)
                  (cl-block nil
                    ;; Skip whitespace, blank lines and comments backwards. Doesn't work properly
@@ -319,45 +320,88 @@ although they are listed as operators in the manual since they can be overridden
 
 (defun fb-doc-pagename (name)
   "Return the wakka page name for a given symbol. Incomplete!"
-  (setq name (downcase name))
-  (when (string-match "^#\\s *\\(\\w*\\)$" name)
-    (setq name (concat "Pp" (match-string 1 name))))
-  (when (string-match "^__\\(.*\\)__$" name)
-    (setq name (concat "Dd"
-                       ;; Remove underscores
-                       (replace-regexp-in-string "_" "" (match-string 1 name)))))
+  ;; Normalise case and remove spaces (e.g. in "# pragma reserve", "option dynamic"),
+  ;; though wiki URLs are case insensitive anyway
+  (setq name (replace-regexp-in-string " " "" (capitalize name)))
   (let ((pagename
          (or
-          ;; Check list of exceptions (currently, take first one if the operator is ambiguous)
+          ;; First check exceptions (currently, take first one if the name is ambiguous)
+          ;; TODO: there are still more ambiguous keywords not included below
+          ;; TODO: ensure all symbols like "write #" can be found when searching for "write" too
           ;; TODO: handle combining assignments like +=
-          (alist-get name
-                     '(("mod" . "OpModulus") ; ("end" . "Endblock") ("end" . "End")
+          (alist-get (downcase name)
+                     '(("end" . "End") ("end" . "Endblock")
+                       ("static" . "Static") ("static" . "StaticMember")
+                       ("const" . "Const") ("const" . "ConstMember")
+                       ("constructor" . "Constructor") ("constructor" . "ModuleConstructor")
+                       ("destructor" . "Destructor") ("destructor" . "ModuleDestructor")
+                       ("byref" . "Byref") ("byref" . "ByrefFunction")  ("byref" . "ByrefVariables")
+                       ("type" . "Type") ("type" . "TypeAlias")  ("type" . "TypeTemp")
+                       ("return" . "Return") ("return" . "ReturnGosub")
+                       ("on" . "OnError") ("on" . "OnGoto") ("on" . "OnGosub")
+                       ("error" . "Error") ("error" . "OnError")
+                       ("if" . "IfThen")
+                       ("is" . "OpIs") ("is" . "Is")
+                       ("extern" . "Extern") ("extern" . "ExternBlock")
+                       ("base" . "Base") ("base" . "BaseInit")
+                       ("?" . "Print") ("?#" . "PrintPp") ("?using" . "Printusing")
+                       ("read" . "ReadFile") ("read" . "Read") ("readwrite" . "ReadWriteFile")
+                       ("write" . "WriteFile") ("write" . "Write")
+                       ("get" . "Getfileio") ("get" . "GetGraphics") ("get#" . "Getfileio")
+                       ("put" . "Putfileio") ("put" . "PutGraphics") ("put#" . "Putfileio")
+                       ("input" . "InputFilemode") ("input" . "InputNum")
+                       ("seek" . "SeekSet") ("seek" . "SeekReturn")
+                       ("mid" . "MidFunction") ("mid" . "MidStatement")
+                       ("string" . "StringFunction") ("string" . "String")
+                       ("wstring" . "WstringFunction") ("wstring" . "Wstring")
+                       ("mod" . "OpModulus") ("shl" . "OpShiftLeft") ("shr" . "OpShiftRight")
+                       ("let" . "Let") ("let" . "LetList")
                        ("=" . "OpEqual") ("=" . "OpAssignment") ("=>" . "OpAssignment")
-                       ("@" . "OpAt") ("&" . "OpConcatConvert")
                        ("<>" . "OpNotEqual") ("<" . "OpLessThan") (">" . "OpGreaterThan")
                        ("<=" . "OpLessThanOrEqual") (">=" . "OpGreaterThanOrEqual")
-                       ("+" . "OpAdd") ("+" . "OpConcat")
+                       ("+" . "OpAdd") ("+" . "OpConcat") ("&" . "OpConcatConvert")
                        ("-" . "OpSubtract") ("-" . "OpNegate")
                        ("*" . "OpMultiply") ("*" . "OpValueOf")
                        ("/" . "OpDivide") ("\\" . "OpIntegerDivide") ("^" . "OpExponentiate")
-                       ("." . "OpMemberAccess") ("->" . "OpPtrMemberAccess")
+                       ("." . "OpMemberAccess") ("->" . "OpPtrMemberAccess") ("@" . "OpAt")
+                       ("pointer" . "Ptr")
+                       ("procptr" . "OpProcptr") ("strptr" . "OpStrPtr") ("varptr" . "OpVarptr")
                        ("()" . "OpArrayIndex") ("[]" . "OpStringIndex") ("[]" . "OpPtrIndex")
+                       ("..." . "Dots")
                        ("#" . "OpPpStringize") ("##" . "OpPpConcat")
+                       ("#endmacro" . "PpMacro") ("#include" . "Include") ("#inclib" . "Inclib")
+                       ("once" . "Include")
                        ("!" . "OpPpEscape") ("$" . "OpPpNoescape"))
                      nil nil 'string=)
+          ;; Operators
           (when (seq-contains-p fb-operator-keyword-list name)
-            (concat "Op" (capitalize name)))
-          (capitalize name))))  ; Wiki URLs are case insensitive anyway
-    (concat "KeyPg" pagename)))
+            (concat "Op" name))
+          ;; Preprocessor and tokens containing #, e.g. #define -> PpDefine, print # -> PrintPp
+          (when (string-match "#" name)
+            (replace-regexp-in-string "#" "Pp" name))
+          ;; '$... preprocessor
+          (when (string-match "\\$\\(.*\\)" name)
+            (concat "Meta" (match-string 1 name)))
+          ;; Defines
+          (when (string-match "^__\\(.*\\)__$" name)
+            (setq name (concat "Dd" name)))
+          ;; else
+          name)))
+    (concat "KeyPg"
+            ;; Remove underscores
+            (replace-regexp-in-string "_" "" pagename))))
 
 (defun fb-lookup-doc (name)
   "Open a web browser for a page in the FB manual documenting a function/keyword.
-To lookup an operator which is punctation rather than a symbol,
-like ->, you have to manually type it at the prompt."
-  ;; TODO: add a list of special cases for ambiguous keywords, and prompt which page to open
+To lookup a keyword which is a non-text token or multiple words, like '->' or
+'line input' or 'get #', you have to manually type it at the prompt."
+  ;; TODO: detect tokens at point like "@" and "...", as well as preprocessor tokens containing
+  ;; whitespace like "# define" and keywords like "open #", "print using", "$dynamic",
+  ;; but beware optional type suffixes like "input$"
+  ;; TODO: if the keyword is ambiguous prompt which page to open
   (interactive
    (list (fb-prompt-with-default-at-point
-          "Lookup in manual? ")))
+          "Keyword (eg. \"line input #\") to lookup in manual? ")))
   (browse-url (concat "http://www.freebasic.net/wiki/wikka.php?wakka=" (fb-doc-pagename name))))
 
 (defun fb-beginning-of-defun (&optional arg)
@@ -374,9 +418,9 @@ arg tells which block: 1 means next end, 2 the one after, -1 the one before, etc
   (interactive "p")
   (if (or (null arg) (= arg 0)) (setq arg 1))
   (when (search-forward-regexp
-         ;; Accept only ')' or 'end' or 'end <fb-toplevel>' or 'endTest' on a line by
+         ;; Accept only ')' or 'end' or 'end <fb-toplevel>' on a line by
          ;; itself, excluding whitespace and comments
-         (concat (fb-rex "^`)|^end[ \t]*(\n|\\s<|test)|^#` *endmacro|^end *(") fb-toplevel-start "\\)")
+         (concat (fb-rex "^`)|^end[ \t]*(\n|\\s<)|^#` *endmacro|^end *(") fb-toplevel-start "\\)")
          nil :move-to-end arg)
     (forward-line)))
 
@@ -575,7 +619,6 @@ so that a repeat call will match it."
 
    ;;; Other toplevel blocks
    (cons fb-toplevel-start font-lock-keyword-face) ;; This is needed to highlight 'sub' in 'end sub', etc
-   (cons "endtest" font-lock-keyword-face)   ;; Extension (TODO: add a variable for it)
 
    ;;; Operators and builtin functions
    ;; "= ( ) <> + - * / ^ ,"
