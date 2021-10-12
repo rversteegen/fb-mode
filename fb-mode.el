@@ -6,6 +6,8 @@
 
 ;; This software is in the public domain and is provided with absolutely no warranty.
 
+;;; Commentary:
+
 ;; Usage:
 ;; Make sure the directory this file is in is in your load-path, and add
 ;;  (require 'fb-mode)
@@ -16,7 +18,7 @@
 ;; and customise fb-indent-level, the number of spaces to indent by.
 ;;
 ;; Available keys:
-;;  C-c C-h:  Lookup the symbol at point in the manual (doesn't work for all keywords)
+;;  C-c C-h:  Lookup a symbol/keyword (default at point) in the manual (doesn't handle ambiguous keywords)
 ;;  F5:       Run `compile', suitably defaulting to fbc, make or scons.
 ;;  C-M-j:    Split the current line at point (possibly in the middle of a comment or string)
 ;;  C-c C-f:  Insert a simple FOR loop
@@ -324,29 +326,46 @@ although they are listed as operators in the manual since they can be overridden
   (let ((pagename
          (or
           ;; First check exceptions (currently, take first one if the name is ambiguous)
+          ;; TODO: there are still more ambiguous keywords not included below
+          ;; TODO: ensure all symbols like "write #" can be found when searching for "write" too
           ;; TODO: handle combining assignments like +=
           (alist-get (downcase name)
-                     '(;("end" . "End") ("end" . "Endblock")
-                       ;("static" . "Static") ("static" . "StaticMember")
-                       ;("const" . "Const") ("const" . "ConstMember")
-                       ;("constructor" . "Constructor") ("constructor" . "ModuleConstructor")
-                       ;("destructor" . "Destructor") ("destructor" . "ModuleDestructor")
-                       ;("byref" . "Byref") ("byref" . "ByrefFunction")  ("byref" . "ByrefVariables")
-                       ;("type" . "Type") ("type" . "TypeAlias")  ("type" . "TypeTemp")
-                       ;("extern" . "Extern") ("extern" . "ExternBlock")
-                       ;("base" . "Base") ("base" . "BaseInit")
+                     '(("end" . "End") ("end" . "Endblock")
+                       ("static" . "Static") ("static" . "StaticMember")
+                       ("const" . "Const") ("const" . "ConstMember")
+                       ("constructor" . "Constructor") ("constructor" . "ModuleConstructor")
+                       ("destructor" . "Destructor") ("destructor" . "ModuleDestructor")
+                       ("byref" . "Byref") ("byref" . "ByrefFunction")  ("byref" . "ByrefVariables")
+                       ("type" . "Type") ("type" . "TypeAlias")  ("type" . "TypeTemp")
+                       ("return" . "Return") ("return" . "ReturnGosub")
+                       ("on" . "OnError") ("on" . "OnGoto") ("on" . "OnGosub")
+                       ("error" . "Error") ("error" . "OnError")
+                       ("if" . "IfThen")
+                       ("is" . "OpIs") ("is" . "Is")
+                       ("extern" . "Extern") ("extern" . "ExternBlock")
+                       ("base" . "Base") ("base" . "BaseInit")
                        ("?" . "Print") ("?#" . "PrintPp") ("?using" . "Printusing")
-                       ("@" . "OpAt") ("&" . "OpConcatConvert")
+                       ("read" . "ReadFile") ("read" . "Read") ("readwrite" . "ReadWriteFile")
+                       ("write" . "WriteFile") ("write" . "Write")
+                       ("get" . "Getfileio") ("get" . "GetGraphics") ("get#" . "Getfileio")
+                       ("put" . "Putfileio") ("put" . "PutGraphics") ("put#" . "Putfileio")
+                       ("input" . "InputFilemode") ("input" . "InputNum")
+                       ("seek" . "SeekSet") ("seek" . "SeekReturn")
+                       ("mid" . "MidFunction") ("mid" . "MidStatement")
+                       ("string" . "StringFunction") ("string" . "String")
+                       ("wstring" . "WstringFunction") ("wstring" . "Wstring")
                        ("mod" . "OpModulus") ("shl" . "OpShiftLeft") ("shr" . "OpShiftRight")
-                       ;("let" . "Let") ("let" . "LetList")
+                       ("let" . "Let") ("let" . "LetList")
                        ("=" . "OpEqual") ("=" . "OpAssignment") ("=>" . "OpAssignment")
                        ("<>" . "OpNotEqual") ("<" . "OpLessThan") (">" . "OpGreaterThan")
                        ("<=" . "OpLessThanOrEqual") (">=" . "OpGreaterThanOrEqual")
-                       ("+" . "OpAdd") ("+" . "OpConcat")
+                       ("+" . "OpAdd") ("+" . "OpConcat") ("&" . "OpConcatConvert")
                        ("-" . "OpSubtract") ("-" . "OpNegate")
                        ("*" . "OpMultiply") ("*" . "OpValueOf")
                        ("/" . "OpDivide") ("\\" . "OpIntegerDivide") ("^" . "OpExponentiate")
-                       ("." . "OpMemberAccess") ("->" . "OpPtrMemberAccess")
+                       ("." . "OpMemberAccess") ("->" . "OpPtrMemberAccess") ("@" . "OpAt")
+                       ("pointer" . "Ptr")
+                       ("procptr" . "OpProcptr") ("strptr" . "OpStrPtr") ("varptr" . "OpVarptr")
                        ("()" . "OpArrayIndex") ("[]" . "OpStringIndex") ("[]" . "OpPtrIndex")
                        ("..." . "Dots")
                        ("#" . "OpPpStringize") ("##" . "OpPpConcat")
@@ -357,9 +376,9 @@ although they are listed as operators in the manual since they can be overridden
           ;; Operators
           (when (seq-contains-p fb-operator-keyword-list name)
             (concat "Op" name))
-          ;; Preprocessor
-          (when (string-match "^#\\(\\w*\\)$" name)
-            (setq name (concat "Pp" (match-string 1 name))))
+          ;; Preprocessor and tokens containing #, e.g. #define -> PpDefine, print # -> PrintPp
+          (when (string-match "#" name)
+            (replace-regexp-in-string "#" "Pp" name))
           ;; '$... preprocessor
           (when (string-match "\\$\\(.*\\)" name)
             (concat "Meta" (match-string 1 name)))
@@ -374,14 +393,15 @@ although they are listed as operators in the manual since they can be overridden
 
 (defun fb-lookup-doc (name)
   "Open a web browser for a page in the FB manual documenting a function/keyword.
-To lookup an operator which is punctation rather than a symbol,
-like ->, you have to manually type it at the prompt."
+To lookup a keyword which is a non-text token or multiple words, like '->' or
+'line input' or 'get #', you have to manually type it at the prompt."
   ;; TODO: detect tokens at point like "@" and "...", as well as preprocessor tokens containing
-  ;; whitespace like "# define" and keywords like "open #", "print using", "line input #".
-  ;; TODO: add a list of special cases for ambiguous keywords, and prompt which page to open
+  ;; whitespace like "# define" and keywords like "open #", "print using", "$dynamic",
+  ;; but beware optional type suffixes like "input$"
+  ;; TODO: if the keyword is ambiguous prompt which page to open
   (interactive
    (list (fb-prompt-with-default-at-point
-          "Lookup in manual? ")))
+          "Keyword (eg. \"line input #\") to lookup in manual? ")))
   (browse-url (concat "http://www.freebasic.net/wiki/wikka.php?wakka=" (fb-doc-pagename name))))
 
 (defun fb-beginning-of-defun (&optional arg)
