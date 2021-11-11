@@ -230,7 +230,7 @@ by fb-indent-level."
                    ;; ...or begins with one of these
                    (when (looking-at (concat
                                       (fb-rex "(for|with|case|while|do|select|scope|withnode|readnode|#if|#ifdef|#ifndef|#elseif|")
-                                      fb--toplevel-start
+                                      fb-toplevel-start
                                       "\\)\\b"))
                      (cl-return 1))
                    0)))
@@ -435,7 +435,7 @@ arg tells which block: 1 means next end, 2 the one after, -1 the one before, etc
 
 
 (defun fb--set-compile-command ()
-  "Called from fb-mode-hook to set the default command for `compile' to run either 'fbc', 'make', or 'scons'."
+  "Called from fb-mode to set the default command for `compile' to run either 'fbc', 'make', or 'scons'."
   ;; If there's a makefile, stick to default ("make -k ")
   (unless (or (file-exists-p "makefile")
 	      (file-exists-p "Makefile"))
