@@ -1,7 +1,7 @@
 ;;; fb-mode.el --- An Emacs major mode for the FreeBASIC programming language
 
 ;; Author:     Ralph Versteegen <rbversteegen@gmail.com>
-;; Version:    1.1.1
+;; Version:    1.1.2
 ;; Keywords:   languages
 
 ;; This software is in the public domain and is provided with absolutely no warranty.
@@ -35,6 +35,11 @@
   :type 'integer
   :safe 'integerp)
 
+(defcustom fb-max-continuation-indent 20
+  "Indentation columns will only be considered if their indentation
+  is less than much more than the initial line indent."
+  :type 'integer
+  :safe 'integerp)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Generic utility functions
@@ -159,54 +164,69 @@ move to the real beginning of it (the first non-whitespace char on it)"
 This function only handles the case where the current line is a continuation
 of the previous, otherwise it returns nil."
   (save-excursion
-    (let ((case-fold-search t))
-      ;; Look last _ line continuation, if any
+    (let ((case-fold-search t)
+          (indenting-linenum (line-number-at-pos)))
+      ;; Look at last _ line continuation, if any
       (when (fb--find-continuation-prev-line)
         (let ((before-last-continuation (match-beginning 0))
+              after-last-line-indent
               (last-point -1)
-              best)
-                                        ;(goto-char before-last-continuation)
-          (fb-back-to-initial-indentation)
-          (save-restriction
-            ;; Consider everything between the initial start of the continued line
-            ;; and the start of the line we're indenting
-            (narrow-to-region (point) before-last-continuation)
+              best
+              initial-linenum
+              initial-column)
+          (flet
+              ((-consider-point ()
+                                (if (< (current-column) (+ initial-column fb-max-continuation-indent))
+                                    (setq best (point)))))
+            ;;(goto-char before-last-continuation)
+            (back-to-indentation)
+            (setq after-last-line-indent (point))
 
-            ;; The default if we have no unclosed sexp is to align after the
-            ;; first symbol on the initial line.
-            (forward-symbol 1)  ; Can't skip over _ on the line by itself, because we narrowed the buffe
-            ;; ...but if there are certain keywords like PRESERVE present, align after them instead.
-            ;; (This isn't totally satisfactory, and line-end-position may not be right either)
-            (while (re-search-forward fb--alignable-keywords (line-end-position) t))
-            ;; Skip over punctuation or whitespace, so given "foo = bar _", align to "bar"
-            (skip-syntax-forward " .")
-            (when (= (point) before-last-continuation)
-              ;; Ignore any whitespace before the _ so that we don't align to the _
-              (skip-syntax-backward " "))
-            (setq best (point))
+            ;; Go to the first line of the continuation and record it
+            (fb-back-to-initial-indentation)
+            (setq initial-column (current-column))
+            (setq initial-linenum (line-number-at-pos))
+            (save-restriction
+              ;; Consider everything between start of the first line
+              ;; and the start of the line we're indenting
+              (narrow-to-region (point) before-last-continuation)
 
-            ;; Look for an open sexp, ie. a (, { or [ with no matching ), } or ], and if so indent just past it.
-            (while (> (point) last-point)
-              (setq last-point (point))
-              (condition-case nil
-                  ;; Can use fb-skip-variable-decl instead
-                  (forward-sexp)
-                (scan-error
-                 ;; This should be an "Unbalanced parenthesis" error,
-                 ;; though it could also be that there's an extra ), ] or }.
-                 ;; Skip over punctation, eg "foo = {" after the "foo" we want to move up to the {
-                 (skip-syntax-forward ".")
-                 (skip-syntax-forward " ")
-                 (skip-syntax-forward "(")
-                 (setq best (point)))))
+              (if (> (1- indenting-linenum) initial-linenum)
+                  ;; This isn't the first continuation line, so use the previous
+                  ;; line's indentation as the default (if no unclosed sexp).
+                  (setq best after-last-line-indent)
 
-            ;; FIXME: given the following, we would align to the "(" instead of "bar"
-            ;; foo ( _
-            ;;        bar, _
-            )
-          ;; Exited narrowing, so can get actual column number
-          (goto-char best)
-          (current-column))))))
+                ;; This is the first continuation line, so the default (if we have no unclosed sexp)
+                ;; is to align after the first symbol on the initial line.
+                (forward-symbol 1)  ; Can't skip over _ on the line by itself, because we narrowed the buffer
+                ;; ...but if there are certain keywords like PRESERVE present, align after them instead.
+                ;; (This isn't totally satisfactory, and line-end-position may not be right either)
+                (while (re-search-forward fb--alignable-keywords (line-end-position) t))
+                ;; Skip over punctuation or whitespace, so given "foo = bar _", align to "bar"
+                (skip-syntax-forward " .")
+                (when (= (point) before-last-continuation)
+                  ;; Ignore any whitespace before the _ so that we don't align to the _
+                  (skip-syntax-backward " "))
+                (-consider-point))
+
+              ;; Look for an open sexp, ie. a (, { or [ with no matching ), } or ], and if so indent just past it.
+              (while (> (point) last-point)
+                (setq last-point (point))
+                (condition-case nil
+                    ;; Can use fb-skip-variable-decl instead
+                    (forward-sexp)
+                  (scan-error
+                   ;; This should be an "Unbalanced parenthesis" error,
+                   ;; though it could also be that there's an extra ), ] or }.
+                   ;; Skip over punctation, eg "foo = {" after the "foo" we want to move up to the {
+                   (skip-syntax-forward ".")
+                   ;;(skip-syntax-forward " ")  ; Doesn't skip newlines
+                   (skip-chars-forward " \t\n")
+                   (skip-syntax-forward "(")
+                   (-consider-point))))
+              ) ; Exit narrowing so can get actual column number
+            (goto-char best)
+            (current-column)))))))
 
 (defun fb--indent-column ()
   "Return the best-guess indentation of the current line, by looking for
@@ -337,10 +357,12 @@ although they are listed as operators in the manual since they can be overridden
                        ("destructor" . "Destructor") ("destructor" . "ModuleDestructor")
                        ("byref" . "Byref") ("byref" . "ByrefFunction")  ("byref" . "ByrefVariables")
                        ("type" . "Type") ("type" . "TypeAlias")  ("type" . "TypeTemp")
+                       ("explicit" . "Enum") ("explicit" . "OptionExplicit")  ;No individual page for enums?
                        ("return" . "Return") ("return" . "ReturnGosub")
                        ("on" . "OnError") ("on" . "OnGoto") ("on" . "OnGosub")
                        ("error" . "Error") ("error" . "OnError")
                        ("if" . "IfThen")
+                       ("select" . "SelectCase")
                        ("is" . "OpIs") ("is" . "Is")
                        ("extern" . "Extern") ("extern" . "ExternBlock")
                        ("base" . "Base") ("base" . "BaseInit")
