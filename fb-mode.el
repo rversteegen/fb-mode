@@ -357,10 +357,12 @@ although they are listed as operators in the manual since they can be overridden
                        ("destructor" . "Destructor") ("destructor" . "ModuleDestructor")
                        ("byref" . "Byref") ("byref" . "ByrefFunction")  ("byref" . "ByrefVariables")
                        ("type" . "Type") ("type" . "TypeAlias")  ("type" . "TypeTemp")
+                       ("explicit" . "Enum") ("explicit" . "OptionExplicit")  ;No individual page for enums?
                        ("return" . "Return") ("return" . "ReturnGosub")
                        ("on" . "OnError") ("on" . "OnGoto") ("on" . "OnGosub")
                        ("error" . "Error") ("error" . "OnError")
                        ("if" . "IfThen")
+                       ("select" . "SelectCase")
                        ("is" . "OpIs") ("is" . "Is")
                        ("extern" . "Extern") ("extern" . "ExternBlock")
                        ("base" . "Base") ("base" . "BaseInit")
